@@ -1,0 +1,27 @@
+[package]
+name = "sparkline-core"
+description = "Spark Connect client, SQL lexer and completion engine for sparkline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tonic.workspace = true
+tonic-types.workspace = true
+prost.workspace = true
+prost-types.workspace = true
+arrow-array.workspace = true
+arrow-schema.workspace = true
+arrow-cast.workspace = true
+arrow-ipc.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+protox.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

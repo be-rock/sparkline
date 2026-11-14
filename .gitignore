@@ -1,1 +1,5 @@
 /target
+/.spark-venv
+/.spark-dev
+/metastore_db
+derby.log

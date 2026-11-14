@@ -1,0 +1,80 @@
+//! Spark SQL keywords (from the Spark 4.0 SQL reference keyword table).
+
+pub const KEYWORDS: &[&str] = &[
+    "ADD", "AFTER", "AGGREGATE", "ALL", "ALTER", "ALWAYS", "ANALYZE", "AND", "ANTI", "ANY",
+    "ARCHIVE", "ARRAY", "AS", "ASC", "AT", "AUTHORIZATION", "BEGIN", "BETWEEN", "BIGINT",
+    "BINARY", "BINDING", "BOOLEAN", "BOTH", "BUCKET", "BUCKETS", "BY", "BYTE", "CACHE",
+    "CALL", "CALLED", "CASCADE", "CASE", "CAST", "CATALOG", "CATALOGS", "CHANGE", "CHAR",
+    "CHARACTER", "CHECK", "CLEAR", "CLUSTER", "CLUSTERED", "CODEGEN", "COLLATE",
+    "COLLATION", "COLLECTION", "COLUMN", "COLUMNS", "COMMENT", "COMMIT", "COMPACT",
+    "COMPACTIONS", "COMPENSATION", "COMPUTE", "CONCATENATE", "CONSTRAINT", "CONTAINS",
+    "COST", "CREATE", "CROSS", "CUBE", "CURRENT", "CURRENT_DATE", "CURRENT_TIME",
+    "CURRENT_TIMESTAMP", "CURRENT_USER", "DATA", "DATABASE", "DATABASES", "DATE",
+    "DATEADD", "DATEDIFF", "DATE_ADD", "DATE_DIFF", "DAY", "DAYOFYEAR", "DAYS", "DBPROPERTIES",
+    "DEC", "DECIMAL", "DECLARE", "DEFAULT", "DEFINED", "DEFINER", "DELETE", "DELIMITED",
+    "DESC", "DESCRIBE", "DETERMINISTIC", "DFS", "DIRECTORIES", "DIRECTORY", "DISTINCT",
+    "DISTRIBUTE", "DIV", "DO", "DOUBLE", "DROP", "ELSE", "ELSEIF", "END", "ESCAPE",
+    "ESCAPED", "EVOLUTION", "EXCEPT", "EXCHANGE", "EXCLUDE", "EXECUTE", "EXISTS", "EXIT",
+    "EXPLAIN", "EXPORT", "EXTEND", "EXTENDED", "EXTERNAL", "EXTRACT", "FALSE", "FETCH",
+    "FIELDS", "FILEFORMAT", "FILTER", "FIRST", "FLOAT", "FOLLOWING", "FOR", "FOREIGN",
+    "FORMAT", "FORMATTED", "FROM", "FULL", "FUNCTION", "FUNCTIONS", "GENERATED", "GLOBAL",
+    "GRANT", "GROUP", "GROUPING", "HANDLER", "HAVING", "HOUR", "HOURS", "IDENTIFIER", "IF",
+    "IGNORE", "ILIKE", "IMMEDIATE", "IMPORT", "IN", "INCLUDE", "INDEX", "INDEXES", "INNER",
+    "INPATH", "INPUT", "INPUTFORMAT", "INSERT", "INT", "INTEGER", "INTERSECT", "INTERVAL",
+    "INTO", "INVOKER", "IS", "ITEMS", "ITERATE", "JOIN", "KEYS", "LANGUAGE", "LAST",
+    "LATERAL", "LAZY", "LEADING", "LEAVE", "LEFT", "LIKE", "LIMIT", "LINES", "LIST",
+    "LOAD", "LOCAL", "LOCATION", "LOCK", "LOCKS", "LOGICAL", "LONG", "LOOP", "MACRO",
+    "MAP", "MATCHED", "MERGE", "MICROSECOND", "MICROSECONDS", "MILLISECOND",
+    "MILLISECONDS", "MINUS", "MINUTE", "MINUTES", "MODIFIES", "MONTH", "MONTHS", "MSCK",
+    "NAME", "NAMESPACE", "NAMESPACES", "NANOSECOND", "NANOSECONDS", "NATURAL", "NO",
+    "NONE", "NOT", "NULL", "NULLS", "NUMERIC", "OF", "OFFSET", "ON", "ONLY", "OPTION",
+    "OPTIONS", "OR", "ORDER", "OUT", "OUTER", "OUTPUTFORMAT", "OVER", "OVERLAPS",
+    "OVERLAY", "OVERWRITE", "PARTITION", "PARTITIONED", "PARTITIONS", "PERCENT", "PIVOT",
+    "PLACING", "POSITION", "PRECEDING", "PRIMARY", "PRINCIPALS", "PROPERTIES", "PURGE",
+    "QUARTER", "QUERY", "RANGE", "READS", "REAL", "RECORDREADER", "RECORDWRITER",
+    "RECOVER", "RECURSIVE", "REDUCE", "REFERENCES", "REFRESH", "RENAME", "REPAIR",
+    "REPEAT", "REPEATABLE", "REPLACE", "RESET", "RESPECT", "RESTRICT", "RETURN",
+    "RETURNS", "REVOKE", "RIGHT", "RLIKE", "ROLE", "ROLES", "ROLLBACK", "ROLLUP", "ROW",
+    "ROWS", "SCHEMA", "SCHEMAS", "SECOND", "SECONDS", "SECURITY", "SELECT", "SEMI",
+    "SEPARATED", "SERDE", "SERDEPROPERTIES", "SESSION_USER", "SET", "SETS", "SHORT",
+    "SHOW", "SINGLE", "SKEWED", "SMALLINT", "SOME", "SORT", "SORTED", "SOURCE", "SPECIFIC",
+    "SQL", "START", "STATISTICS", "STORED", "STRATIFY", "STRING", "STRUCT", "SUBSTR",
+    "SUBSTRING", "SYNC", "SYSTEM_TIME", "SYSTEM_VERSION", "TABLE", "TABLES", "TABLESAMPLE",
+    "TARGET", "TBLPROPERTIES", "TEMP", "TEMPORARY", "TERMINATED", "THEN", "TIME",
+    "TIMEDIFF", "TIMESTAMP", "TIMESTAMPADD",
+    "TIMESTAMPDIFF", "TIMESTAMP_LTZ", "TIMESTAMP_NTZ", "TINYINT", "TO", "TOUCH", "TRAILING", "TRANSACTION", "TRANSACTIONS",
+    "TRANSFORM", "TRIM", "TRUE", "TRUNCATE", "TRY_CAST", "TYPE", "UNARCHIVE", "UNBOUNDED",
+    "UNCACHE", "UNION", "UNIQUE", "UNKNOWN", "UNLOCK", "UNPIVOT", "UNSET", "UNTIL",
+    "UPDATE", "USE", "USER", "USING", "VALUES", "VAR", "VARCHAR", "VARIABLE", "VARIANT",
+    "VERSION", "VIEW", "VIEWS", "VOID", "WEEK", "WEEKS", "WHEN", "WHERE", "WHILE",
+    "WINDOW", "WITH", "WITHIN", "YEAR", "YEARS", "ZONE",
+];
+
+/// Case-insensitive keyword check.
+pub fn is_keyword(word: &str) -> bool {
+    if word.len() > 32 || !word.is_ascii() {
+        return false;
+    }
+    let upper = word.to_ascii_uppercase();
+    KEYWORDS.binary_search(&upper.as_str()).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keywords_sorted_for_binary_search() {
+        let mut sorted = KEYWORDS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted, KEYWORDS, "KEYWORDS must be sorted and unique");
+    }
+
+    #[test]
+    fn lookup() {
+        assert!(is_keyword("select"));
+        assert!(is_keyword("SeLeCt"));
+        assert!(!is_keyword("selectx"));
+    }
+}

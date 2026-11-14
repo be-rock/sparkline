@@ -46,14 +46,30 @@ error: [TABLE_OR_VIEW_NOT_FOUND] The table or view `missing_tbl` cannot be found
 - **Scriptable**: `-e "SQL"`, `-f file.sql` or SQL piped on stdin; tables go
   to stdout, status to stderr, and the exit code is non-zero on error.
 
+## Install
+
+Prebuilt binaries for macOS and Linux (x86_64 and arm64) are attached to each
+[GitHub Release](https://github.com/be-rock/sparkline/releases):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/be-rock/sparkline/main/install.sh | sh
+```
+
+This installs to `~/.local/bin` and verifies the download's SHA-256. If the
+repository is private, run `sh install.sh` from a clone; it then downloads
+through an authenticated `gh` CLI. Set `SPARKLINE_VERSION=v0.1.0` to pin a
+version, or `SPARKLINE_INSTALL_DIR` to change the install location. You can
+also download a tarball from the release page yourself.
+
+From source (needs Rust): `make install`, which runs
+`cargo install --path crates/sparkline`.
+
 ## Quick start
 
 ```sh
-cargo build --release
-# Start a local Spark 4.0 Connect server (uses uv + pyspark from PyPI):
-dev/spark-connect-server.sh &
-target/release/sparkline                       # sc://localhost:15002 by default
-target/release/sparkline -r sc://host:15002 -e "SHOW DATABASES"
+make server &                                  # local Spark 4.0 Connect server (uv + pyspark from PyPI)
+sparkline                                      # connects to sc://localhost:15002 by default
+sparkline -r sc://host:15002 -e "SHOW DATABASES"
 ```
 
 Requires a Spark Connect server. Tested against Spark 4.0.5; 3.5 should work
@@ -110,7 +126,8 @@ History is stored in `~/.local/share/sparkline/history.txt`.
 crates/sparkline-core   Spark Connect client, lexer, completion engine, catalog cache
   proto/                vendored Spark Connect protos (see proto/SPARK_VERSION)
 crates/sparkline        the REPL binary (reedline, comfy-table)
-dev/                    local Spark Connect server script, TUI smoke-test driver
+dev/                    local Spark Connect server, test and packaging scripts
+install.sh              installer for released binaries
 ```
 
 `sparkline-core` has no terminal dependencies, so a full-screen (ratatui)
@@ -118,16 +135,38 @@ front-end can reuse it as-is.
 
 ## Development
 
+`make help` lists all targets. The main ones:
+
+| | |
+|---|---|
+| `make test` | unit tests; no Spark needed |
+| `make test-live` | protocol tests against Spark Connect 4.0 |
+| `make test-tui` | drives the REPL in a pseudo-terminal and checks the screens |
+| `make test-all` | lint and all of the above; what CI runs |
+| `make lint` / `make fmt` | rustfmt check and clippy / format the code |
+| `make server` | run a local Spark Connect server in the foreground |
+
+`test-live` and `test-tui` use a server already listening on `:15002`, or start
+a temporary one (and stop it afterwards). The first run downloads pyspark and
+needs Java 17+ and [uv](https://docs.astral.sh/uv/).
+
+CI (`.github/workflows/ci.yml`) runs lint, the unit tests, and the live and TUI
+tests against a real Spark 4.0 server on every push to `main` and on every PR.
+
+## Releasing
+
 ```sh
-cargo test                                     # unit tests (no server needed)
-
-dev/spark-connect-server.sh &                  # live protocol tests
-SPARKLINE_TEST_REMOTE=sc://localhost:15002 cargo test -p sparkline-core --test live
-
-# Interactive smoke test in a pseudo-terminal (prints screen snapshots)
-uv pip install --python .spark-venv/bin/python pyte
-.spark-venv/bin/python dev/drive_tui.py target/debug/sparkline
+make set-version V=0.2.0      # bumps Cargo.toml (skip for the first release, 0.1.0)
+git commit -am "Release 0.2.0"
+make release                  # on main: runs lint and tests, tags v0.2.0, pushes main and the tag
+gh run watch                  # follow the build
 ```
+
+The tag triggers `.github/workflows/release.yml`. It builds
+`aarch64`/`x86_64` binaries for macOS and Linux, packages each as
+`sparkline-<target>.tar.gz` with a `.sha256` (`dev/package.sh`; try it locally
+with `make package`), and publishes a GitHub Release with generated notes. The
+build fails if the tag doesn't match the version in `Cargo.toml`.
 
 Protos are compiled with [protox](https://crates.io/crates/protox), so `protoc`
 isn't needed. To target another Spark version, replace

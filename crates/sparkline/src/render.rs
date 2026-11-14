@@ -52,15 +52,28 @@ fn paint(color: bool, style: Style, s: &str) -> String {
     }
 }
 
+/// Spark-style timestamps: `2024-01-01 12:00:00.123`. Zoned timestamps
+/// arrive tagged with the session time zone and are shown as local time in
+/// that zone, as Spark itself prints them.
+const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
+
+fn format_options() -> FormatOptions<'static> {
+    FormatOptions::default()
+        .with_display_error(true)
+        .with_timestamp_format(Some(TIMESTAMP_FORMAT))
+        .with_timestamp_tz_format(Some(TIMESTAMP_FORMAT))
+}
+
 /// Formats every cell as display strings (`None` = SQL NULL).
 fn cells(schema: &SchemaRef, batches: &[RecordBatch]) -> Vec<Vec<Option<String>>> {
-    let opts = FormatOptions::default().with_display_error(true);
+    let opts = format_options();
     let mut rows = Vec::new();
     for b in batches {
-        let fmts: Vec<_> = b
+        // A column arrow can't format shows the reason instead of failing silently.
+        let fmts: Vec<Result<ArrayFormatter, String>> = b
             .columns()
             .iter()
-            .map(|c| ArrayFormatter::try_new(c.as_ref(), &opts).ok())
+            .map(|c| ArrayFormatter::try_new(c.as_ref(), &opts).map_err(|e| format!("<{e}>")))
             .collect();
         for r in 0..b.num_rows() {
             let row = (0..schema.fields().len())
@@ -69,11 +82,10 @@ fn cells(schema: &SchemaRef, batches: &[RecordBatch]) -> Vec<Vec<Option<String>>
                     if col.is_null(r) {
                         return None;
                     }
-                    Some(
-                        fmts[c]
-                            .as_ref()
-                            .map_or_else(|| "?".into(), |f| f.value(r).to_string()),
-                    )
+                    Some(match &fmts[c] {
+                        Ok(f) => f.value(r).to_string(),
+                        Err(e) => e.clone(),
+                    })
                 })
                 .collect();
             rows.push(row);
@@ -462,6 +474,31 @@ mod tests {
             },
         );
         assert!(!out.contains("RECORD"), "{out}");
+    }
+
+    #[test]
+    fn named_time_zone_timestamps() {
+        use arrow_array::{Array, TimestampMicrosecondArray};
+        // 2024-01-01T18:00:00Z, which is noon in Chicago (UTC-6 in winter).
+        let ts = TimestampMicrosecondArray::from(vec![1_704_132_000_000_000])
+            .with_timezone("America/Chicago");
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ts",
+            ts.data_type().clone(),
+            true,
+        )]));
+        let b = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts) as ArrayRef]).unwrap();
+        let out = render_results(
+            &schema,
+            &[b],
+            RenderOpts {
+                color: false,
+                expanded: Expanded::Off,
+                width: None,
+            },
+        );
+        assert!(out.contains("2024-01-01 12:00:00"), "{out}");
+        assert!(out.contains("timestamp"), "{out}");
     }
 
     #[test]

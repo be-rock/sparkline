@@ -18,7 +18,7 @@ tonic-build = "0.12"
 prost = "0.13"
 prost-types = "0.13"
 protox = "0.7"
-arrow-array = "54"
+arrow-array = { version = "54", features = ["chrono-tz"] }
 arrow-schema = "54"
 arrow-cast = "54"
 arrow-ipc = { version = "54", features = ["lz4", "zstd"] }

@@ -110,7 +110,12 @@ def main() -> int:
     signal.signal(signal.SIGALRM, watchdog)
     signal.alarm(TIMEOUT_S)
 
-    check("startup banner and prompt", until("spark:default >", 30))
+    # On a cold server the first prompt may be a plain `spark >`; the current
+    # database shows up in later prompts once it has loaded.
+    check("startup banner and prompt", until("Ctrl-D to quit.", 30) and until("spark", 30) and until(" >", 30))
+
+    send("SELECT 1;\r")
+    check("prompt shows the current database", until("spark:default >", 30))
 
     send("CREATE OR REPLACE TEMP VIEW events AS SELECT id AS event_id, id % 3 AS user_id, 'click' AS kind FROM range(10);\r")
     until("OK ·", 30)

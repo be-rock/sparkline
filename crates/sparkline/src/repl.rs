@@ -285,10 +285,12 @@ struct SqlPrompt {
 
 impl Prompt for SqlPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
-        Cow::Owned(format!(
-            "spark:{}",
-            self.catalog.current_db().unwrap_or_else(|| "…".into())
-        ))
+        // The database appears once the background catalog load has it:
+        // immediately on a warm server, a few seconds on a cold one.
+        match self.catalog.current_db() {
+            Some(db) => Cow::Owned(format!("spark:{db}")),
+            None => Cow::Borrowed("spark"),
+        }
     }
 
     fn render_prompt_right(&self) -> Cow<'_, str> {

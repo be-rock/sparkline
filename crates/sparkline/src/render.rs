@@ -114,6 +114,9 @@ fn sanitize(s: &str, max_chars: usize) -> String {
 
 pub fn render_results(schema: &SchemaRef, batches: &[RecordBatch], opts: RenderOpts) -> String {
     let rows = cells(schema, batches);
+    if let Some(text) = as_document(schema, &rows) {
+        return text;
+    }
     let table = render_table(schema, &rows, opts);
     let too_wide = match opts.width {
         Some(w) => table.lines().any(|l| visible_width(l) > w as usize),
@@ -130,6 +133,32 @@ pub fn render_results(schema: &SchemaRef, batches: &[RecordBatch], opts: RenderO
     } else {
         table
     }
+}
+
+/// A single text column containing multi-line values (`EXPLAIN`,
+/// `SHOW CREATE TABLE`, ...) is a document, not a table: print it verbatim,
+/// without truncation or a table frame.
+fn as_document(schema: &SchemaRef, rows: &[Vec<Option<String>>]) -> Option<String> {
+    let [field] = &schema.fields()[..] else {
+        return None;
+    };
+    if !matches!(
+        field.data_type(),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        return None;
+    }
+    let values: Vec<&str> = rows.iter().filter_map(|r| r[0].as_deref()).collect();
+    if !values.iter().any(|v| v.contains('\n')) {
+        return None;
+    }
+    Some(
+        values
+            .iter()
+            .map(|v| v.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    )
 }
 
 fn render_table(schema: &SchemaRef, rows: &[Vec<Option<String>>], opts: RenderOpts) -> String {
@@ -499,6 +528,50 @@ mod tests {
         );
         assert!(out.contains("2024-01-01 12:00:00"), "{out}");
         assert!(out.contains("timestamp"), "{out}");
+    }
+
+    #[test]
+    fn multiline_text_column_printed_verbatim() {
+        let plan = format!(
+            "== Physical Plan ==\n*(1) ColumnarToRow\n+- FileScan parquet {}",
+            "x".repeat(200)
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("plan", DataType::Utf8, true)]));
+        let b = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec![plan.clone()])) as ArrayRef],
+        )
+        .unwrap();
+        let out = render_results(
+            &schema,
+            &[b],
+            RenderOpts {
+                color: false,
+                expanded: Expanded::Auto,
+                width: Some(80),
+            },
+        );
+        assert_eq!(out, plan);
+    }
+
+    #[test]
+    fn single_line_text_column_stays_a_table() {
+        let schema = Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, true)]));
+        let b = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef],
+        )
+        .unwrap();
+        let out = render_results(
+            &schema,
+            &[b],
+            RenderOpts {
+                color: false,
+                expanded: Expanded::Auto,
+                width: None,
+            },
+        );
+        assert!(out.contains("╭"), "{out}");
     }
 
     #[test]

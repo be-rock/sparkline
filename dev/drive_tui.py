@@ -114,8 +114,13 @@ def main() -> int:
     # database shows up in later prompts once it has loaded.
     check("startup banner and prompt", until("Ctrl-D to quit.", 30) and until("spark", 30) and until(" >", 30))
 
-    send("SELECT 1;\r")
-    check("prompt shows the current database", until("spark:default >", 30))
+    # The prompt is redrawn on each new line, so keep entering statements until
+    # the background catalog load has the current database (slow on a cold
+    # server: Spark is still warming up its first queries).
+    deadline = time.time() + 60
+    while time.time() < deadline and not until("spark:default >", 2):
+        send("SELECT 1;\r", 0.5)
+    check("prompt shows the current database", "spark:default >" in text())
 
     send("CREATE OR REPLACE TEMP VIEW events AS SELECT id AS event_id, id % 3 AS user_id, 'click' AS kind FROM range(10);\r")
     until("OK ·", 30)

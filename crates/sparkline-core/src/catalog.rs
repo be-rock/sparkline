@@ -80,7 +80,10 @@ impl Catalog {
             inflight: Mutex::new(HashSet::new()),
             done: Condvar::new(),
         });
-        let catalog = Catalog { shared: shared.clone(), tx };
+        let catalog = Catalog {
+            shared: shared.clone(),
+            tx,
+        };
 
         let loader = catalog.clone();
         rt.spawn(async move {
@@ -109,7 +112,11 @@ impl Catalog {
         if self.state().is_loaded(&load) {
             return;
         }
-        let mut inflight = self.shared.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inflight = self
+            .shared
+            .inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if inflight.insert(load.clone()) {
             let _ = self.tx.send(load);
         }
@@ -118,7 +125,11 @@ impl Catalog {
     /// Blocks until none of `loads` is in flight, or `timeout` passes.
     pub fn wait_for(&self, loads: &[Load], timeout: Duration) {
         let deadline = Instant::now() + timeout;
-        let mut inflight = self.shared.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inflight = self
+            .shared
+            .inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         while loads.iter().any(|l| inflight.contains(l)) {
             let now = Instant::now();
             if now >= deadline {
@@ -147,7 +158,11 @@ impl Catalog {
 
     /// After `USE`: re-read the current database and load its tables.
     pub fn refresh_current_db(&self) {
-        self.shared.state.write().unwrap_or_else(|e| e.into_inner()).current_db = None;
+        self.shared
+            .state
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .current_db = None;
         self.request(Load::CurrentDb);
     }
 
@@ -158,7 +173,13 @@ impl Catalog {
             // On failure, cache an empty entry so completion doesn't retry
             // on every keystroke (e.g. columns of a CTE or a TVF).
             match (&load, result) {
-                (Load::CurrentDb, r) => s.current_db = Some(r.ok().and_then(|v| v.into_iter().next()).unwrap_or_else(|| "default".into())),
+                (Load::CurrentDb, r) => {
+                    s.current_db = Some(
+                        r.ok()
+                            .and_then(|v| v.into_iter().next())
+                            .unwrap_or_else(|| "default".into()),
+                    )
+                }
                 (Load::Databases, r) => s.databases = Some(r.unwrap_or_default()),
                 (Load::Tables(db), r) => {
                     let tables = r.unwrap_or_default().into_iter().map(|row| {
@@ -180,17 +201,27 @@ impl Catalog {
                 self.request(Load::Tables(db.to_lowercase()));
             }
         }
-        let mut inflight = self.shared.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inflight = self
+            .shared
+            .inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         inflight.remove(&load);
         self.shared.done.notify_all();
     }
 
-    async fn fetch(&self, client: &SparkClient, load: &Load) -> Result<Vec<String>, crate::error::ClientError> {
+    async fn fetch(
+        &self,
+        client: &SparkClient,
+        load: &Load,
+    ) -> Result<Vec<String>, crate::error::ClientError> {
         Ok(match load {
             Load::CurrentDb => column(&client.sql_collect("SELECT current_database()").await?, 0),
             Load::Databases => column(&client.sql_collect("SHOW DATABASES").await?, 0),
             Load::Tables(db) => {
-                let batches = client.sql_collect(&format!("SHOW TABLES IN {}", quote_parts(db))).await?;
+                let batches = client
+                    .sql_collect(&format!("SHOW TABLES IN {}", quote_parts(db)))
+                    .await?;
                 // columns: namespace, tableName, isTemporary
                 let names = column(&batches, 1);
                 let temps = column(&batches, 2);
@@ -200,12 +231,22 @@ impl Catalog {
                     .map(|(n, t)| format!("{n}\u{1f}{t}"))
                     .collect()
             }
-            Load::Columns(t) => column(&client.sql_collect(&format!("SHOW COLUMNS IN {}", quote_parts(t))).await?, 0),
+            Load::Columns(t) => column(
+                &client
+                    .sql_collect(&format!("SHOW COLUMNS IN {}", quote_parts(t)))
+                    .await?,
+                0,
+            ),
             Load::Functions => {
                 let mut fns: Vec<String> = column(&client.sql_collect("SHOW FUNCTIONS").await?, 0)
                     .into_iter()
                     .map(|f| f.rsplit('.').next().unwrap_or_default().to_string())
-                    .filter(|f| f.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') && f.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                    .filter(|f| {
+                        f.chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphabetic() || c == '_')
+                            && f.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    })
                     .collect();
                 fns.sort();
                 fns.dedup();
@@ -216,7 +257,11 @@ impl Catalog {
 }
 
 fn quote_parts(dotted: &str) -> String {
-    dotted.split('.').map(quote_ident).collect::<Vec<_>>().join(".")
+    dotted
+        .split('.')
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Column `idx` of all batches, rendered as strings.

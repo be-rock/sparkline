@@ -151,7 +151,9 @@ pub fn tokenize(src: &str) -> Vec<Token> {
                 }
             }
             TokenKind::Variable
-        } else if c.is_ascii_digit() || (c == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit)) {
+        } else if c.is_ascii_digit()
+            || (c == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_digit))
+        {
             i = lex_number(bytes, i);
             TokenKind::Number
         } else if is_ident_start(src, i) {
@@ -166,7 +168,10 @@ pub fn tokenize(src: &str) -> Vec<Token> {
         } else if let Some(len) = operator_len(&bytes[i..]) {
             i += len;
             TokenKind::Operator
-        } else if matches!(c, b'(' | b')' | b',' | b';' | b'.' | b'[' | b']' | b'{' | b'}') {
+        } else if matches!(
+            c,
+            b'(' | b')' | b',' | b';' | b'.' | b'[' | b']' | b'{' | b'}'
+        ) {
             i += 1;
             TokenKind::Punct
         } else {
@@ -174,7 +179,12 @@ pub fn tokenize(src: &str) -> Vec<Token> {
             TokenKind::Unknown
         };
 
-        tokens.push(Token { kind, start, end: i, unterminated });
+        tokens.push(Token {
+            kind,
+            start,
+            end: i,
+            unterminated,
+        });
     }
     tokens
 }
@@ -196,13 +206,17 @@ fn lex_number(bytes: &[u8], mut i: usize) -> usize {
         }
     }
     // Type suffixes: 1L, 1S, 1Y, 1.0D, 1.0F, 1.0BD
-    if i + 1 < bytes.len() && bytes[i..i + 2].eq_ignore_ascii_case(b"bd") {
-        if !bytes.get(i + 2).is_some_and(|b| is_ident_byte(*b)) {
-            return i + 2;
-        }
+    if i + 1 < bytes.len()
+        && bytes[i..i + 2].eq_ignore_ascii_case(b"bd")
+        && !bytes.get(i + 2).is_some_and(|b| is_ident_byte(*b))
+    {
+        return i + 2;
     }
     if i < bytes.len()
-        && matches!(bytes[i].to_ascii_uppercase(), b'L' | b'S' | b'Y' | b'D' | b'F')
+        && matches!(
+            bytes[i].to_ascii_uppercase(),
+            b'L' | b'S' | b'Y' | b'D' | b'F'
+        )
         && !bytes.get(i + 1).is_some_and(|b| is_ident_byte(*b))
     {
         i += 1;
@@ -213,10 +227,12 @@ fn lex_number(bytes: &[u8], mut i: usize) -> usize {
 fn operator_len(rest: &[u8]) -> Option<usize> {
     const OPS: &[&[u8]] = &[
         b"<=>", b"<=", b">=", b"<>", b"!=", b"==", b"||", b"&&", b"<<", b">>>", b">>", b"->",
-        b"::", b"=", b"<", b">", b"+", b"-", b"*", b"/", b"%", b"&", b"|", b"^", b"~", b"!",
-        b":", b"?",
+        b"::", b"=", b"<", b">", b"+", b"-", b"*", b"/", b"%", b"&", b"|", b"^", b"~", b"!", b":",
+        b"?",
     ];
-    OPS.iter().find(|op| rest.starts_with(op)).map(|op| op.len())
+    OPS.iter()
+        .find(|op| rest.starts_with(op))
+        .map(|op| op.len())
 }
 
 fn is_ident_byte(b: u8) -> bool {
@@ -224,11 +240,17 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 fn is_ident_start(src: &str, i: usize) -> bool {
-    src[i..].chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+    src[i..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_')
 }
 
 fn is_ident_continue(src: &str, i: usize) -> bool {
-    src[i..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+    src[i..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
 
 fn char_len(src: &str, i: usize) -> usize {
@@ -326,7 +348,12 @@ mod tests {
     fn strings_and_quoted_idents() {
         assert_eq!(
             kinds(r#"'it\'s' "dq" r'raw\' `we``ird`"#),
-            vec![(String, r"'it\'s'"), (String, r#""dq""#), (String, r"r'raw\'"), (QuotedIdent, "`we``ird`")]
+            vec![
+                (String, r"'it\'s'"),
+                (String, r#""dq""#),
+                (String, r"r'raw\'"),
+                (QuotedIdent, "`we``ird`")
+            ]
         );
     }
 
@@ -335,30 +362,49 @@ mod tests {
         for src in ["SELECT 'abc", "SELECT `abc", "/* open", "SELECT ${x"] {
             assert!(tokenize(src).iter().any(|t| t.unterminated), "{src}");
         }
-        assert!(!tokenize("/* a /* nested */ b */").iter().any(|t| t.unterminated));
+        assert!(!tokenize("/* a /* nested */ b */")
+            .iter()
+            .any(|t| t.unterminated));
     }
 
     #[test]
     fn number_suffixes() {
-        assert_eq!(kinds("10L 1.0BD 2Y 3.5D"), vec![(Number, "10L"), (Number, "1.0BD"), (Number, "2Y"), (Number, "3.5D")]);
+        assert_eq!(
+            kinds("10L 1.0BD 2Y 3.5D"),
+            vec![
+                (Number, "10L"),
+                (Number, "1.0BD"),
+                (Number, "2Y"),
+                (Number, "3.5D")
+            ]
+        );
         // An identifier starting with digits-then-letters isn't a suffix.
         assert_eq!(kinds("1Lx").first(), Some(&(Number, "1")));
     }
 
     #[test]
     fn variables() {
-        assert_eq!(kinds("${env:x} $y"), vec![(Variable, "${env:x}"), (Variable, "$y")]);
+        assert_eq!(
+            kinds("${env:x} $y"),
+            vec![(Variable, "${env:x}"), (Variable, "$y")]
+        );
     }
 
     #[test]
     fn unicode_identifiers() {
-        assert_eq!(kinds("SELECT café"), vec![(Keyword, "SELECT"), (Ident, "café")]);
+        assert_eq!(
+            kinds("SELECT café"),
+            vec![(Keyword, "SELECT"), (Ident, "café")]
+        );
     }
 
     #[test]
     fn statement_splitting() {
         let src = "select 1; -- c\n select ';' ; /* only comment */ ; select 2";
-        assert_eq!(split_statements(src), vec!["select 1", "-- c\n select ';'", "select 2"]);
+        assert_eq!(
+            split_statements(src),
+            vec!["select 1", "-- c\n select ';'", "select 2"]
+        );
     }
 
     #[test]
@@ -372,7 +418,10 @@ mod tests {
 
     #[test]
     fn leading_kw() {
-        assert_eq!(leading_keyword("  -- c\n (select 1)").as_deref(), Some("SELECT"));
+        assert_eq!(
+            leading_keyword("  -- c\n (select 1)").as_deref(),
+            Some("SELECT")
+        );
         assert_eq!(leading_keyword("use db").as_deref(), Some("USE"));
     }
 }

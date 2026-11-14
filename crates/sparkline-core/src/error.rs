@@ -36,7 +36,10 @@ pub struct SparkError {
 
 impl SparkError {
     pub fn from_message(raw: &str) -> Self {
-        SparkError { message: clean_message(raw), ..Default::default() }
+        SparkError {
+            message: clean_message(raw),
+            ..Default::default()
+        }
     }
 
     /// Where to draw the caret in `stmt`: the query-context span if Spark sent
@@ -73,7 +76,14 @@ impl fmt::Display for SparkError {
 /// JVM stack traces.
 pub fn clean_message(raw: &str) -> String {
     let mut msg = raw.trim();
-    for marker in ["\n== SQL", "\n== SQL(", ";\n'", ";\n+-", "\n\tat ", "\nJVM stacktrace:"] {
+    for marker in [
+        "\n== SQL",
+        "\n== SQL(",
+        ";\n'",
+        ";\n+-",
+        "\n\tat ",
+        "\nJVM stacktrace:",
+    ] {
         if let Some(i) = msg.find(marker) {
             msg = &msg[..i];
         }
@@ -115,7 +125,10 @@ mod tests {
     fn cleans_parse_excerpt() {
         let raw = "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'FORM'. SQLSTATE: 42601 (line 1, pos 9)\n\n== SQL ==\nSELECT 1 FORM t\n---------^^^\n";
         let e = SparkError::from_message(raw);
-        assert_eq!(e.message, "[PARSE_SYNTAX_ERROR] Syntax error at or near 'FORM'. SQLSTATE: 42601 (line 1, pos 9)");
+        assert_eq!(
+            e.message,
+            "[PARSE_SYNTAX_ERROR] Syntax error at or near 'FORM'. SQLSTATE: 42601 (line 1, pos 9)"
+        );
         assert_eq!(e.caret_span("SELECT 1 FORM t"), Some((9, 9)));
     }
 
@@ -127,7 +140,11 @@ mod tests {
 
     #[test]
     fn span_preferred_and_clamped() {
-        let e = SparkError { span: Some((14, 99)), message: "x line 1 pos 0".into(), ..Default::default() };
+        let e = SparkError {
+            span: Some((14, 99)),
+            message: "x line 1 pos 0".into(),
+            ..Default::default()
+        };
         assert_eq!(e.caret_span("SELECT * FROM nope"), Some((14, 17)));
     }
 }

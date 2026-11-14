@@ -137,7 +137,10 @@ impl fmt::Debug for ConnectionString {
             .field("token", &self.token.as_ref().map(|_| "<redacted>"))
             .field("use_ssl", &self.use_ssl)
             .field("user_id", &self.user_id)
-            .field("headers", &self.headers.iter().map(|(k, _)| k).collect::<Vec<_>>())
+            .field(
+                "headers",
+                &self.headers.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -165,7 +168,10 @@ mod tests {
         assert_eq!(cs.token.as_deref(), Some("abc"));
         assert!(cs.use_ssl, "token implies TLS");
         assert_eq!(cs.user_id.as_deref(), Some("me"));
-        assert_eq!(cs.headers, vec![("x-databricks-cluster-id".into(), "0123".into())]);
+        assert_eq!(
+            cs.headers,
+            vec![("x-databricks-cluster-id".into(), "0123".into())]
+        );
         assert_eq!(cs.endpoint(), "https://example.com:443");
     }
 
@@ -179,10 +185,19 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert!(matches!(ConnectionString::parse("http://x"), Err(ConnError::Scheme(_))));
+        assert!(matches!(
+            ConnectionString::parse("http://x"),
+            Err(ConnError::Scheme(_))
+        ));
         assert_eq!(ConnectionString::parse("sc://"), Err(ConnError::NoHost));
-        assert!(matches!(ConnectionString::parse("sc://h:abc"), Err(ConnError::Port(_))));
-        assert!(matches!(ConnectionString::parse("sc://h/;novalue"), Err(ConnError::Param(_))));
+        assert!(matches!(
+            ConnectionString::parse("sc://h:abc"),
+            Err(ConnError::Port(_))
+        ));
+        assert!(matches!(
+            ConnectionString::parse("sc://h/;novalue"),
+            Err(ConnError::Param(_))
+        ));
     }
 
     #[test]

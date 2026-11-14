@@ -16,7 +16,9 @@ use tonic_types::StatusExt;
 use crate::conn::ConnectionString;
 use crate::error::{clean_message, ClientError, SparkError};
 use crate::proto::spark_connect_service_client::SparkConnectServiceClient;
-use crate::proto::{self, analyze_plan_request, analyze_plan_response, execute_plan_response, interrupt_request};
+use crate::proto::{
+    self, analyze_plan_request, analyze_plan_response, execute_plan_response, interrupt_request,
+};
 
 /// Arrow batches can be large; tonic's 4 MiB default is too small.
 const MAX_MESSAGE_SIZE: usize = 256 * 1024 * 1024;
@@ -60,7 +62,11 @@ impl SparkClient {
             .tcp_nodelay(true)
             .http2_keep_alive_interval(Duration::from_secs(30))
             .keep_alive_while_idle(true)
-            .user_agent(conn.user_agent.clone().unwrap_or_else(|| CLIENT_TYPE.to_string()))
+            .user_agent(
+                conn.user_agent
+                    .clone()
+                    .unwrap_or_else(|| CLIENT_TYPE.to_string()),
+            )
             .map_err(|e| connect_err(&e))?;
         if conn.use_ssl {
             endpoint = endpoint
@@ -85,9 +91,10 @@ impl SparkClient {
             })
             .collect::<Result<Vec<_>, ClientError>>()?;
 
-        let inner = SparkConnectServiceClient::with_interceptor(channel, Headers(Arc::new(headers)))
-            .max_decoding_message_size(MAX_MESSAGE_SIZE)
-            .max_encoding_message_size(MAX_MESSAGE_SIZE);
+        let inner =
+            SparkConnectServiceClient::with_interceptor(channel, Headers(Arc::new(headers)))
+                .max_decoding_message_size(MAX_MESSAGE_SIZE)
+                .max_encoding_message_size(MAX_MESSAGE_SIZE);
 
         let session_id = match &conn.session_id {
             Some(id) => id.clone(),
@@ -98,9 +105,17 @@ impl SparkClient {
             .clone()
             .or_else(|| std::env::var("USER").ok())
             .unwrap_or_default();
-        let user_context = proto::UserContext { user_name: user_id.clone(), user_id, extensions: vec![] };
+        let user_context = proto::UserContext {
+            user_name: user_id.clone(),
+            user_id,
+            extensions: vec![],
+        };
 
-        Ok(SparkClient { inner, session_id, user_context })
+        Ok(SparkClient {
+            inner,
+            session_id,
+            user_context,
+        })
     }
 
     pub fn session_id(&self) -> &str {
@@ -114,7 +129,9 @@ impl SparkClient {
             session_id: self.session_id.clone(),
             user_context: Some(self.user_context.clone()),
             client_type: Some(CLIENT_TYPE.into()),
-            analyze: Some(analyze_plan_request::Analyze::SparkVersion(analyze_plan_request::SparkVersion {})),
+            analyze: Some(analyze_plan_request::Analyze::SparkVersion(
+                analyze_plan_request::SparkVersion {},
+            )),
             ..Default::default()
         };
         let resp = match self.inner.clone().analyze_plan(req).await {
@@ -129,7 +146,11 @@ impl SparkClient {
 
     /// Starts executing `sql`. With `limit`, the query is wrapped in a Limit
     /// relation so the server only produces that many rows.
-    pub async fn execute_sql(&self, sql: &str, limit: Option<i32>) -> Result<Execution, ClientError> {
+    pub async fn execute_sql(
+        &self,
+        sql: &str,
+        limit: Option<i32>,
+    ) -> Result<Execution, ClientError> {
         self.execute(sql_plan(sql, limit)).await
     }
 
@@ -144,7 +165,11 @@ impl SparkClient {
             ..Default::default()
         };
         match self.inner.clone().execute_plan(req).await {
-            Ok(resp) => Ok(Execution { client: self.clone(), operation_id, stream: resp.into_inner() }),
+            Ok(resp) => Ok(Execution {
+                client: self.clone(),
+                operation_id,
+                stream: resp.into_inner(),
+            }),
             Err(s) => Err(self.status_to_error(s).await),
         }
     }
@@ -167,7 +192,9 @@ impl SparkClient {
             user_context: Some(self.user_context.clone()),
             client_type: Some(CLIENT_TYPE.into()),
             interrupt_type: interrupt_request::InterruptType::OperationId as i32,
-            interrupt: Some(interrupt_request::Interrupt::OperationId(operation_id.to_string())),
+            interrupt: Some(interrupt_request::Interrupt::OperationId(
+                operation_id.to_string(),
+            )),
             ..Default::default()
         };
         self.inner.clone().interrupt(req).await.map_err(rpc_error)?;
@@ -182,7 +209,11 @@ impl SparkClient {
             client_type: Some(CLIENT_TYPE.into()),
             allow_reconnect: false,
         };
-        self.inner.clone().release_session(req).await.map_err(rpc_error)?;
+        self.inner
+            .clone()
+            .release_session(req)
+            .await
+            .map_err(rpc_error)?;
         Ok(())
     }
 
@@ -217,7 +248,11 @@ impl SparkClient {
                         err.span = t
                             .query_contexts
                             .iter()
-                            .find(|q| q.context_type == 0 && q.start_index >= 0 && q.stop_index >= q.start_index)
+                            .find(|q| {
+                                q.context_type == 0
+                                    && q.start_index >= 0
+                                    && q.stop_index >= q.start_index
+                            })
                             .map(|q| (q.start_index as usize, q.stop_index as usize));
                     }
                 }
@@ -230,7 +265,10 @@ impl SparkClient {
         ClientError::Spark(err)
     }
 
-    async fn fetch_error_details(&self, error_id: &str) -> Result<proto::FetchErrorDetailsResponse, ClientError> {
+    async fn fetch_error_details(
+        &self,
+        error_id: &str,
+    ) -> Result<proto::FetchErrorDetailsResponse, ClientError> {
         let req = proto::FetchErrorDetailsRequest {
             session_id: self.session_id.clone(),
             user_context: Some(self.user_context.clone()),
@@ -238,7 +276,13 @@ impl SparkClient {
             client_type: Some(CLIENT_TYPE.into()),
             ..Default::default()
         };
-        Ok(self.inner.clone().fetch_error_details(req).await.map_err(rpc_error)?.into_inner())
+        Ok(self
+            .inner
+            .clone()
+            .fetch_error_details(req)
+            .await
+            .map_err(rpc_error)?
+            .into_inner())
     }
 }
 
@@ -246,7 +290,10 @@ fn rpc_error(status: Status) -> ClientError {
     match status.code() {
         Code::Unavailable => ClientError::Unavailable(status.message().to_string()),
         Code::Cancelled => ClientError::Cancelled,
-        code => ClientError::Rpc { code, message: clean_message(status.message()) },
+        code => ClientError::Rpc {
+            code,
+            message: clean_message(status.message()),
+        },
     }
 }
 
@@ -268,16 +315,24 @@ pub fn sql_plan(sql: &str, limit: Option<i32>) -> proto::Plan {
     use proto::relation::RelType;
     let sql_rel = proto::Relation {
         common: None,
-        rel_type: Some(RelType::Sql(proto::Sql { query: sql.to_string(), ..Default::default() })),
+        rel_type: Some(RelType::Sql(proto::Sql {
+            query: sql.to_string(),
+            ..Default::default()
+        })),
     };
     let root = match limit {
         Some(n) => proto::Relation {
             common: None,
-            rel_type: Some(RelType::Limit(Box::new(proto::Limit { input: Some(Box::new(sql_rel)), limit: n }))),
+            rel_type: Some(RelType::Limit(Box::new(proto::Limit {
+                input: Some(Box::new(sql_rel)),
+                limit: n,
+            }))),
         },
         None => sql_rel,
     };
-    proto::Plan { op_type: Some(proto::plan::OpType::Root(root)) }
+    proto::Plan {
+        op_type: Some(proto::plan::OpType::Root(root)),
+    }
 }
 
 /// Aggregate job progress for the running operation.
@@ -306,7 +361,10 @@ impl From<&execute_plan_response::ExecutionProgress> for Progress {
 
 #[derive(Debug)]
 pub enum ExecEvent {
-    Batches { schema: SchemaRef, batches: Vec<RecordBatch> },
+    Batches {
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+    },
     Progress(Progress),
 }
 
@@ -332,7 +390,9 @@ impl Execution {
                     let (schema, batches) = decode_arrow(&b.data)?;
                     return Ok(Some(ExecEvent::Batches { schema, batches }));
                 }
-                Some(ResponseType::ExecutionProgress(p)) => return Ok(Some(ExecEvent::Progress((&p).into()))),
+                Some(ResponseType::ExecutionProgress(p)) => {
+                    return Ok(Some(ExecEvent::Progress((&p).into())))
+                }
                 // ResultComplete, metrics, etc.: nothing to show.
                 _ => continue,
             }

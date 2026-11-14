@@ -50,7 +50,10 @@ impl TableRef {
     pub fn matches(&self, ident: &str) -> bool {
         match &self.alias {
             Some(a) => a.eq_ignore_ascii_case(ident),
-            None => self.name.last().is_some_and(|n| n.eq_ignore_ascii_case(ident)),
+            None => self
+                .name
+                .last()
+                .is_some_and(|n| n.eq_ignore_ascii_case(ident)),
         }
     }
 }
@@ -62,8 +65,11 @@ pub fn analyze(line: &str, pos: usize) -> Option<Context> {
     let before = &line[..pos];
     let tokens = tokenize(before);
     if let Some(last) = tokens.last() {
-        let inside = matches!(last.kind, TokenKind::String | TokenKind::Comment | TokenKind::Variable)
-            && (last.unterminated || (last.kind == TokenKind::Comment && last.text(before).starts_with("--")));
+        let inside = matches!(
+            last.kind,
+            TokenKind::String | TokenKind::Comment | TokenKind::Variable
+        ) && (last.unterminated
+            || (last.kind == TokenKind::Comment && last.text(before).starts_with("--")));
         if inside {
             return None;
         }
@@ -87,7 +93,11 @@ pub fn analyze(line: &str, pos: usize) -> Option<Context> {
     // Table references in the statement, excluding the name being typed
     // (otherwise `FROM sales.` would make `sales` look like a table).
     let chain_start_in_stmt = chain_start.max(stmt_start);
-    let statement = format!("{}{}", &line[stmt_start..chain_start_in_stmt], &line[pos..stmt_end.max(pos)]);
+    let statement = format!(
+        "{}{}",
+        &line[stmt_start..chain_start_in_stmt],
+        &line[pos..stmt_end.max(pos)]
+    );
     let tables = table_refs(&statement);
 
     let expect = if !parts.is_empty() {
@@ -100,11 +110,18 @@ pub fn analyze(line: &str, pos: usize) -> Option<Context> {
         expect_from_previous(before, &sig)
     };
 
-    Some(Context { expect, partial, replace_start, tables })
+    Some(Context {
+        expect,
+        partial,
+        replace_start,
+        tables,
+    })
 }
 
 fn expect_from_previous(src: &str, sig: &[&Token]) -> Expect {
-    let Some(prev) = sig.last() else { return Expect::Any };
+    let Some(prev) = sig.last() else {
+        return Expect::Any;
+    };
     let kw = |t: &Token| (t.kind == TokenKind::Keyword).then(|| t.text(src).to_ascii_uppercase());
     let prev_kw = kw(prev);
 
@@ -125,7 +142,9 @@ fn expect_from_previous(src: &str, sig: &[&Token]) -> Expect {
                 return Expect::Table;
             }
             "USE" | "DATABASE" | "SCHEMA" | "NAMESPACE" => return Expect::Database,
-            "IN" if preceded_by(src, sig, &["TABLES", "VIEWS", "FUNCTIONS"]) => return Expect::Database,
+            "IN" if preceded_by(src, sig, &["TABLES", "VIEWS", "FUNCTIONS"]) => {
+                return Expect::Database
+            }
             "IN" if preceded_by(src, sig, &["COLUMNS"]) => return Expect::Table,
             _ => {}
         }
@@ -133,7 +152,11 @@ fn expect_from_previous(src: &str, sig: &[&Token]) -> Expect {
 
     // `FROM a, <cursor>` → another table.
     if prev.is(src, ",") {
-        let clause = sig.iter().rev().filter_map(|t| kw(t)).find(|k| CLAUSE_KEYWORDS.contains(&k.as_str()));
+        let clause = sig
+            .iter()
+            .rev()
+            .filter_map(|t| kw(t))
+            .find(|k| CLAUSE_KEYWORDS.contains(&k.as_str()));
         if clause.as_deref() == Some("FROM") && paren_depth_since_clause(src, sig) == 0 {
             return Expect::Table;
         }
@@ -142,13 +165,30 @@ fn expect_from_previous(src: &str, sig: &[&Token]) -> Expect {
 }
 
 const CLAUSE_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "JOIN", "ON", "SET", "VALUES", "WINDOW",
-    "SORT", "CLUSTER", "DISTRIBUTE", "USING",
+    "SELECT",
+    "FROM",
+    "WHERE",
+    "GROUP",
+    "HAVING",
+    "ORDER",
+    "LIMIT",
+    "JOIN",
+    "ON",
+    "SET",
+    "VALUES",
+    "WINDOW",
+    "SORT",
+    "CLUSTER",
+    "DISTRIBUTE",
+    "USING",
 ];
 
 /// Is the token before `sig.last()` one of `words`?
 fn preceded_by(src: &str, sig: &[&Token], words: &[&str]) -> bool {
-    sig.len() >= 2 && words.iter().any(|w| sig[sig.len() - 2].text(src).eq_ignore_ascii_case(w))
+    sig.len() >= 2
+        && words
+            .iter()
+            .any(|w| sig[sig.len() - 2].text(src).eq_ignore_ascii_case(w))
 }
 
 /// Net paren depth between the last FROM and the end (a `,` inside
@@ -196,7 +236,10 @@ fn trailing_name_chain(src: &str, tokens: &[Token]) -> (usize, usize, Vec<String
 }
 
 fn is_name(t: &Token) -> bool {
-    matches!(t.kind, TokenKind::Ident | TokenKind::Keyword | TokenKind::QuotedIdent)
+    matches!(
+        t.kind,
+        TokenKind::Ident | TokenKind::Keyword | TokenKind::QuotedIdent
+    )
 }
 
 pub fn unquote(s: &str) -> String {
@@ -209,7 +252,9 @@ pub fn unquote(s: &str) -> String {
 /// Quote an identifier with backticks if it isn't a plain identifier.
 pub fn quote_ident(s: &str) -> String {
     let plain = !s.is_empty()
-        && s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && s.chars()
+            .next()
+            .is_some_and(|c| c.is_alphabetic() || c == '_')
         && s.chars().all(|c| c.is_alphanumeric() || c == '_');
     if plain {
         s.to_string()
@@ -220,16 +265,56 @@ pub fn quote_ident(s: &str) -> String {
 
 /// Words that can't be a table alias.
 const NOT_ALIAS: &[&str] = &[
-    "WHERE", "JOIN", "ON", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "SEMI", "ANTI", "NATURAL",
-    "GROUP", "ORDER", "LIMIT", "HAVING", "UNION", "EXCEPT", "INTERSECT", "MINUS", "LATERAL", "USING",
-    "WINDOW", "CLUSTER", "DISTRIBUTE", "SORT", "SELECT", "FROM", "AS", "TABLESAMPLE", "PIVOT", "UNPIVOT",
-    "SET", "VALUES", "WHEN", "THEN", "OFFSET", "VERSION", "TIMESTAMP", "FOR", "WITH",
+    "WHERE",
+    "JOIN",
+    "ON",
+    "LEFT",
+    "RIGHT",
+    "INNER",
+    "OUTER",
+    "FULL",
+    "CROSS",
+    "SEMI",
+    "ANTI",
+    "NATURAL",
+    "GROUP",
+    "ORDER",
+    "LIMIT",
+    "HAVING",
+    "UNION",
+    "EXCEPT",
+    "INTERSECT",
+    "MINUS",
+    "LATERAL",
+    "USING",
+    "WINDOW",
+    "CLUSTER",
+    "DISTRIBUTE",
+    "SORT",
+    "SELECT",
+    "FROM",
+    "AS",
+    "TABLESAMPLE",
+    "PIVOT",
+    "UNPIVOT",
+    "SET",
+    "VALUES",
+    "WHEN",
+    "THEN",
+    "OFFSET",
+    "VERSION",
+    "TIMESTAMP",
+    "FOR",
+    "WITH",
 ];
 
 /// Extracts table references (`FROM`/`JOIN` targets with optional aliases,
 /// plus CTE names) from a statement.
 pub fn table_refs(stmt: &str) -> Vec<TableRef> {
-    let toks: Vec<Token> = tokenize(stmt).into_iter().filter(|t| !t.is_trivia()).collect();
+    let toks: Vec<Token> = tokenize(stmt)
+        .into_iter()
+        .filter(|t| !t.is_trivia())
+        .collect();
     let mut refs = Vec::new();
     let mut in_from = false;
     let mut depth_at_from = 0;
@@ -254,7 +339,11 @@ pub fn table_refs(stmt: &str) -> Vec<TableRef> {
             && toks.get(i + 1).is_some_and(|n| n.is_kw(stmt, "AS"))
             && toks.get(i + 2).is_some_and(|n| n.is(stmt, "("))
         {
-            refs.push(TableRef { name: vec![unquote(text)], alias: None, is_cte: true });
+            refs.push(TableRef {
+                name: vec![unquote(text)],
+                alias: None,
+                is_cte: true,
+            });
         }
 
         let starts_ref = t.is_kw(stmt, "FROM")
@@ -266,7 +355,10 @@ pub fn table_refs(stmt: &str) -> Vec<TableRef> {
             in_from = true;
             depth_at_from = depth;
         } else if t.kind == TokenKind::Keyword
-            && matches!(text.to_ascii_uppercase().as_str(), "WHERE" | "GROUP" | "ORDER" | "HAVING" | "LIMIT" | "UNION" | "WINDOW")
+            && matches!(
+                text.to_ascii_uppercase().as_str(),
+                "WHERE" | "GROUP" | "ORDER" | "HAVING" | "LIMIT" | "UNION" | "WINDOW"
+            )
             && depth == depth_at_from
         {
             in_from = false;
@@ -280,13 +372,20 @@ pub fn table_refs(stmt: &str) -> Vec<TableRef> {
                     j += 1;
                 }
                 let alias = toks.get(j).filter(|n| {
-                    is_name(n) && !NOT_ALIAS.iter().any(|w| n.text(stmt).eq_ignore_ascii_case(w))
+                    is_name(n)
+                        && !NOT_ALIAS
+                            .iter()
+                            .any(|w| n.text(stmt).eq_ignore_ascii_case(w))
                 });
                 let alias = alias.map(|n| unquote(n.text(stmt)));
                 if alias.is_some() {
                     j += 1;
                 }
-                refs.push(TableRef { name, alias, is_cte: false });
+                refs.push(TableRef {
+                    name,
+                    alias,
+                    is_cte: false,
+                });
                 i = j;
                 continue;
             }
@@ -300,7 +399,9 @@ pub fn table_refs(stmt: &str) -> Vec<TableRef> {
 fn read_name(src: &str, toks: &[Token], mut i: usize) -> (Vec<String>, usize) {
     let mut parts = Vec::new();
     while let Some(t) = toks.get(i) {
-        if !is_name(t) || (parts.is_empty() && t.kind == TokenKind::Keyword && !is_soft_keyword(t.text(src))) {
+        if !is_name(t)
+            || (parts.is_empty() && t.kind == TokenKind::Keyword && !is_soft_keyword(t.text(src)))
+        {
             break;
         }
         parts.push(unquote(t.text(src)));
@@ -317,7 +418,9 @@ fn read_name(src: &str, toks: &[Token], mut i: usize) -> (Vec<String>, usize) {
 /// Keywords that are commonly used as table names and are non-reserved in Spark.
 fn is_soft_keyword(word: &str) -> bool {
     !NOT_ALIAS.iter().any(|w| word.eq_ignore_ascii_case(w))
-        && !["TABLE", "VALUES", "LATERAL", "SELECT"].iter().any(|w| word.eq_ignore_ascii_case(w))
+        && !["TABLE", "VALUES", "LATERAL", "SELECT"]
+            .iter()
+            .any(|w| word.eq_ignore_ascii_case(w))
 }
 
 #[cfg(test)]
@@ -359,17 +462,32 @@ mod tests {
     #[test]
     fn member_access() {
         let c = ctx("SELECT e.");
-        assert_eq!(c.expect, Expect::Member { qualifier: vec!["e".into()] });
+        assert_eq!(
+            c.expect,
+            Expect::Member {
+                qualifier: vec!["e".into()]
+            }
+        );
         assert_eq!(c.partial, "");
         assert_eq!(c.replace_start, "SELECT e.".len());
 
         let c = ctx("SELECT * FROM `my db`.ev");
-        assert_eq!(c.expect, Expect::Member { qualifier: vec!["my db".into()] });
+        assert_eq!(
+            c.expect,
+            Expect::Member {
+                qualifier: vec!["my db".into()]
+            }
+        );
         assert_eq!(c.partial, "ev");
         assert_eq!(c.replace_start, "SELECT * FROM `my db`.".len());
 
         let c = ctx("select cat.db.t");
-        assert_eq!(c.expect, Expect::Member { qualifier: vec!["cat".into(), "db".into()] });
+        assert_eq!(
+            c.expect,
+            Expect::Member {
+                qualifier: vec!["cat".into(), "db".into()]
+            }
+        );
     }
 
     #[test]
@@ -396,7 +514,12 @@ mod tests {
     fn cursor_in_middle_uses_whole_statement_for_tables() {
         let s = "SELECT e. FROM db.events e";
         let c = analyze(s, "SELECT e.".len()).unwrap();
-        assert_eq!(c.expect, Expect::Member { qualifier: vec!["e".into()] });
+        assert_eq!(
+            c.expect,
+            Expect::Member {
+                qualifier: vec!["e".into()]
+            }
+        );
         assert_eq!(c.tables.len(), 1);
         assert_eq!(c.tables[0].qualified(), "db.events");
         assert_eq!(c.tables[0].alias.as_deref(), Some("e"));
@@ -409,7 +532,10 @@ mod tests {
              SELECT * FROM recent r JOIN `db`.`users` AS u ON r.id = u.id, other \
              LEFT JOIN t2 WHERE 1",
         );
-        let got: Vec<_> = refs.iter().map(|r| (r.qualified(), r.alias.clone(), r.is_cte)).collect();
+        let got: Vec<_> = refs
+            .iter()
+            .map(|r| (r.qualified(), r.alias.clone(), r.is_cte))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -432,7 +558,11 @@ mod tests {
 
     #[test]
     fn alias_matching() {
-        let r = TableRef { name: vec!["db".into(), "events".into()], alias: None, is_cte: false };
+        let r = TableRef {
+            name: vec!["db".into(), "events".into()],
+            alias: None,
+            is_cte: false,
+        };
         assert!(r.matches("EVENTS"));
         assert!(!r.matches("db"));
     }

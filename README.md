@@ -58,8 +58,12 @@ curl -fsSL https://raw.githubusercontent.com/be-rock/sparkline/main/install.sh |
 This installs to `~/.local/bin` and verifies the download's SHA-256. If the
 repository is private, run `sh install.sh` from a clone; it then downloads
 through an authenticated `gh` CLI. Set `SPARKLINE_VERSION=v0.1.0` to pin a
-version, or `SPARKLINE_INSTALL_DIR` to change the install location. You can
-also download a tarball from the release page yourself.
+version, or `SPARKLINE_INSTALL_DIR` to change the install location.
+
+To install by hand, download `sparkline-<target>.tar.gz` for your platform from
+the release page, extract it, and put `sparkline` on your `PATH`. On macOS, a
+binary downloaded through a browser is quarantined by Gatekeeper; clear that
+with `xattr -d com.apple.quarantine sparkline`.
 
 From source (needs Rust): `make install`, which runs
 `cargo install --path crates/sparkline`.

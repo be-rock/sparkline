@@ -6,7 +6,7 @@ members = ["crates/sparkline-core", "crates/sparkline"]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.80"
+rust-version = "1.85"
 
 [workspace.dependencies]
 sparkline-core = { path = "crates/sparkline-core" }

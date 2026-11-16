@@ -26,6 +26,7 @@ jobs:
   live:
     name: Tests against Spark Connect 4.0
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6

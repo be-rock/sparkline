@@ -15,6 +15,21 @@ async fn client() -> Option<SparkClient> {
     Some(SparkClient::connect(&conn).await.expect("connect"))
 }
 
+/// Defines a live test that fails after TEST_TIMEOUT instead of hanging (a
+/// stuck query, e.g. behind orphaned tasks, would otherwise block forever).
+macro_rules! live_test {
+    ($name:ident, $body:block) => {
+        #[tokio::test(flavor = "multi_thread")]
+        async fn $name() {
+            tokio::time::timeout(TEST_TIMEOUT, async move $body)
+                .await
+                .unwrap_or_else(|_| panic!("{} timed out after {:?}", stringify!($name), TEST_TIMEOUT))
+        }
+    };
+}
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(120);
+
 macro_rules! live_client {
     () => {
         match client().await {
@@ -27,8 +42,7 @@ macro_rules! live_client {
     };
 }
 
-#[tokio::test]
-async fn version_and_simple_query() {
+live_test!(version_and_simple_query, {
     let c = live_client!();
     let v = c.spark_version().await.unwrap();
     assert!(v.starts_with("4."), "unexpected version {v}");
@@ -40,10 +54,9 @@ async fn version_and_simple_query() {
     let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     assert_eq!(rows, 5);
     assert_eq!(column(&batches, 1), vec!["0", "2", "4", "6", "8"]);
-}
+});
 
-#[tokio::test]
-async fn limit_wrapping() {
+live_test!(limit_wrapping, {
     let c = live_client!();
     let mut exec = c
         .execute_sql("SELECT * FROM range(1000)", Some(11))
@@ -56,10 +69,9 @@ async fn limit_wrapping() {
         }
     }
     assert_eq!(rows, 11);
-}
+});
 
-#[tokio::test]
-async fn ddl_and_temp_views() {
+live_test!(ddl_and_temp_views, {
     let c = live_client!();
     c.sql_collect("CREATE OR REPLACE TEMP VIEW sl_test_v AS SELECT 1 AS a, 'x' AS b")
         .await
@@ -69,10 +81,9 @@ async fn ddl_and_temp_views() {
         0,
     );
     assert_eq!(cols, vec!["a", "b"]);
-}
+});
 
-#[tokio::test]
-async fn analysis_error_has_class_and_span() {
+live_test!(analysis_error_has_class_and_span, {
     let c = live_client!();
     let err = c
         .sql_collect("SELECT * FROM definitely_missing_table")
@@ -94,10 +105,9 @@ async fn analysis_error_has_class_and_span() {
         "plan dump should be stripped: {}",
         e.message
     );
-}
+});
 
-#[tokio::test]
-async fn parse_error_has_position() {
+live_test!(parse_error_has_position, {
     let c = live_client!();
     let stmt = "SELECT 1 FORM t";
     let err = c.sql_collect(stmt).await.unwrap_err();
@@ -111,37 +121,75 @@ async fn parse_error_has_position() {
     );
     assert!(e.caret_span(stmt).is_some(), "{e:?}");
     assert!(!e.message.contains("== SQL =="), "{}", e.message);
-}
+});
 
-#[tokio::test]
-async fn interrupt_cancels_long_query() {
+// Cancelling right after submitting lands while Spark is still planning the
+// query: the race where a plain interrupt orphans the job (see
+// Execution::cancel).
+live_test!(cancel_during_planning_leaves_nothing_running, {
     let c = live_client!();
-    let mut exec = c
-        .execute_sql("SELECT count(*) FROM range(0, 100000000000, 1, 4) WHERE reflect('java.lang.Thread', 'sleep', 1L) IS NULL", None)
-        .await
-        .unwrap();
-    let op = exec.operation_id.clone();
-    let c2 = c.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        c2.interrupt(&op).await.unwrap();
-    });
-    let start = Instant::now();
-    let result = loop {
-        match exec.next_event().await {
-            Ok(Some(_)) => continue,
-            other => break other,
+    let exec = c.execute_sql(&endless(), None).await.unwrap();
+    exec.cancel().await;
+    assert_task_slots_free(&c).await;
+});
+
+live_test!(cancel_while_running, {
+    let c = live_client!();
+    let mut exec = c.execute_sql(&endless(), None).await.unwrap();
+    loop {
+        match exec.next_event().await.unwrap() {
+            Some(ExecEvent::Progress(p)) if p.stages_total > 0 => break,
+            Some(_) => continue,
+            None => panic!("the endless query ended on its own"),
         }
-    };
+    }
+    let start = Instant::now();
+    exec.cancel().await;
     assert!(
-        matches!(result, Err(ClientError::Cancelled)),
-        "got {result:?}"
+        start.elapsed() < Duration::from_secs(15),
+        "cancel took {:?}",
+        start.elapsed()
     );
-    assert!(start.elapsed() < Duration::from_secs(30));
+    assert_task_slots_free(&c).await;
+});
+
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(8, |n| n.get())
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn catalog_loads_in_background() {
+/// A query that never ends unless cancelled (1 ms per row), with one partition
+/// per core, so if its tasks outlive a cancel they occupy every task slot of a
+/// `local[*]` server on this machine.
+fn endless() -> String {
+    format!(
+        "SELECT count(*) FROM range(0, 100000000000, 1, {}) \
+         WHERE reflect('java.lang.Thread', 'sleep', 1L) IS NULL",
+        cores()
+    )
+}
+
+/// Fails (fast) if cancelled work is still occupying Spark's task slots, by
+/// running a query that needs every slot. Orphaned tasks from the endless
+/// query would make it hang.
+async fn assert_task_slots_free(c: &SparkClient) {
+    let sql = format!("SELECT count(*) FROM range(0, 1000, 1, {})", cores() * 2);
+    let r = tokio::time::timeout(Duration::from_secs(60), c.sql_collect(&sql)).await;
+    assert!(
+        matches!(r, Ok(Ok(_))),
+        "Spark couldn't schedule tasks after a cancel; cancelled work is still running: {r:?}"
+    );
+}
+
+// A client giving up on an execution (error path, early return) without
+// cancelling it explicitly. Dropped immediately, i.e. during planning.
+live_test!(dropping_an_execution_cancels_it, {
+    let c = live_client!();
+    let exec = c.execute_sql(&endless(), None).await.unwrap();
+    drop(exec);
+    assert_task_slots_free(&c).await;
+});
+
+live_test!(catalog_loads_in_background, {
     let c = live_client!();
     c.sql_collect("CREATE OR REPLACE TEMP VIEW sl_cat_v AS SELECT 1 AS col_one")
         .await
@@ -181,10 +229,9 @@ async fn catalog_loads_in_background() {
         s.columns.get("sl_cat_v"),
         Some(&vec!["col_one".to_string()])
     );
-}
+});
 
-#[tokio::test(flavor = "multi_thread")]
-async fn alias_column_completion_end_to_end() {
+live_test!(alias_column_completion_end_to_end, {
     use sparkline_core::complete::analyze;
     use sparkline_core::suggest::suggest;
     let c = live_client!();
@@ -213,4 +260,4 @@ async fn alias_column_completion_end_to_end() {
     .await
     .unwrap();
     assert_eq!(values, vec!["event_id", "user_id"]);
-}
+});

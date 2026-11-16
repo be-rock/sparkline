@@ -23,6 +23,12 @@ use crate::proto::{
 /// Arrow batches can be large; tonic's 4 MiB default is too small.
 const MAX_MESSAGE_SIZE: usize = 256 * 1024 * 1024;
 
+/// How long a cancel waits for the query's first Spark job to start before
+/// interrupting anyway (see [`Execution::cancel`]).
+const PLANNING_GRACE: Duration = Duration::from_secs(5);
+/// How long a cancel waits for the server to acknowledge the interrupt.
+const CANCEL_ACK_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub const CLIENT_TYPE: &str = concat!("sparkline/", env!("CARGO_PKG_VERSION"));
 
 type Inner = SparkConnectServiceClient<InterceptedService<Channel, Headers>>;
@@ -168,7 +174,9 @@ impl SparkClient {
             Ok(resp) => Ok(Execution {
                 client: self.clone(),
                 operation_id,
-                stream: resp.into_inner(),
+                stream: Some(resp.into_inner()),
+                finished: false,
+                job_started: false,
             }),
             Err(s) => Err(self.status_to_error(s).await),
         }
@@ -373,18 +381,56 @@ pub enum ExecEvent {
 pub struct Execution {
     client: SparkClient,
     pub operation_id: String,
-    stream: Streaming<proto::ExecutePlanResponse>,
+    /// Always `Some` until dropped (see `Drop`).
+    stream: Option<Streaming<proto::ExecutePlanResponse>>,
+    /// The stream ended (completed or failed) on the server's side.
+    finished: bool,
+    /// Spark has started running a job for this operation (seen via progress
+    /// or results). Until then, an interrupt can race with planning.
+    job_started: bool,
+}
+
+/// Spark Connect keeps running an operation whose client goes away without
+/// interrupting it. If an unfinished execution is dropped (error path, early
+/// return, giving up after a cancel), interrupt it so it can't be orphaned.
+///
+/// The stream must stay open until the interrupt has been handled: once the
+/// server sees the stream reset it stops tracking the operation by id, so a
+/// later interrupt finds nothing to cancel while the job keeps running.
+impl Drop for Execution {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let Ok(rt) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let Some(stream) = self.stream.take() else {
+            return;
+        };
+        let client = self.client.clone();
+        let op = std::mem::take(&mut self.operation_id);
+        rt.spawn(cancel_operation(client, op, stream, self.job_started));
+    }
 }
 
 impl Execution {
     pub async fn next_event(&mut self) -> Result<Option<ExecEvent>, ClientError> {
         use execute_plan_response::ResponseType;
         loop {
-            let msg = match self.stream.message().await {
+            let stream = self.stream.as_mut().expect("stream is only taken on drop");
+            let msg = match stream.message().await {
                 Ok(Some(m)) => m,
-                Ok(None) => return Ok(None),
-                Err(s) => return Err(self.client.status_to_error(s).await),
+                Ok(None) => {
+                    self.finished = true;
+                    return Ok(None);
+                }
+                Err(s) => {
+                    self.finished = true;
+                    return Err(self.client.status_to_error(s).await);
+                }
             };
+            self.job_started |= shows_job_started(&msg);
             match msg.response_type {
                 Some(ResponseType::ArrowBatch(b)) => {
                     let (schema, batches) = decode_arrow(&b.data)?;
@@ -402,6 +448,59 @@ impl Execution {
     pub fn client(&self) -> &SparkClient {
         &self.client
     }
+
+    /// Cancels the operation without leaving work running on the cluster, and
+    /// waits (bounded) for the server to acknowledge it.
+    ///
+    /// Works around a Spark 4.0 race: an interrupt that arrives while the query
+    /// is still being planned marks the operation cancelled, but the job the
+    /// planner submits a moment later is never cancelled and runs forever,
+    /// holding task slots. So if no job has started yet, this first waits (up
+    /// to a few seconds) until one has, or until the operation ends on its own.
+    pub async fn cancel(mut self) {
+        // The stream moves to the cancel routine, which makes Drop a no-op.
+        let Some(stream) = self.stream.take() else {
+            return;
+        };
+        self.finished = true;
+        let op = std::mem::take(&mut self.operation_id);
+        cancel_operation(self.client.clone(), op, stream, self.job_started).await;
+    }
+}
+
+/// Does this response show that Spark is running (or has run) a job?
+fn shows_job_started(msg: &proto::ExecutePlanResponse) -> bool {
+    use execute_plan_response::ResponseType;
+    match &msg.response_type {
+        Some(ResponseType::ExecutionProgress(p)) => !p.stages.is_empty(),
+        Some(ResponseType::ArrowBatch(_)) => true,
+        _ => false,
+    }
+}
+
+async fn cancel_operation(
+    client: SparkClient,
+    operation_id: String,
+    mut stream: Streaming<proto::ExecutePlanResponse>,
+    mut job_started: bool,
+) {
+    let deadline = tokio::time::Instant::now() + PLANNING_GRACE;
+    while !job_started {
+        match tokio::time::timeout_at(deadline, stream.message()).await {
+            // Still planning after the grace period: interrupt anyway.
+            Err(_) => break,
+            Ok(Ok(Some(msg))) => job_started = shows_job_started(&msg),
+            // The operation ended by itself; nothing left to cancel.
+            Ok(Ok(None)) | Ok(Err(_)) => return,
+        }
+    }
+    let _ = tokio::time::timeout(CANCEL_ACK_TIMEOUT, client.interrupt(&operation_id)).await;
+    // Keep the stream open until the server ends it: resetting it early makes
+    // the server forget the operation before the cancel has taken effect.
+    let _ = tokio::time::timeout(CANCEL_ACK_TIMEOUT, async {
+        while let Ok(Some(_)) = stream.message().await {}
+    })
+    .await;
 }
 
 /// Each ArrowBatch message is a complete Arrow IPC stream (schema + batches).

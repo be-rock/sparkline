@@ -13,9 +13,6 @@ use crate::render::progress_line;
 
 /// Don't flash a spinner for fast queries.
 const SPINNER_DELAY: Duration = Duration::from_millis(300);
-/// How long to wait for the server to acknowledge a cancel before giving up
-/// on the stream.
-const CANCEL_GRACE: Duration = Duration::from_secs(5);
 
 pub struct StatementResult {
     pub schema: Option<SchemaRef>,
@@ -44,8 +41,39 @@ fn is_query(stmt: &str) -> bool {
     )
 }
 
+/// Ctrl-C (SIGINT), registered once for the whole process.
+///
+/// While this exists Ctrl-C can't kill sparkline. That matters: Spark Connect
+/// keeps running a query whose client disconnects without interrupting it, so
+/// dying mid-query would leave the query running on the cluster. Signals are
+/// buffered, so a Ctrl-C pressed while a query is still being submitted is
+/// acted on as soon as the operation exists.
+pub struct Sigint(tokio::signal::unix::Signal);
+
+impl Sigint {
+    /// Must be called inside the tokio runtime.
+    pub fn install() -> std::io::Result<Self> {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).map(Sigint)
+    }
+
+    pub async fn recv(&mut self) {
+        self.0.recv().await;
+    }
+
+    /// Consumes any Ctrl-C received since the last call, without waiting.
+    pub fn take_pending(&mut self) -> bool {
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let mut any = false;
+        while let std::task::Poll::Ready(Some(())) = self.0.poll_recv(&mut cx) {
+            any = true;
+        }
+        any
+    }
+}
+
 pub async fn run_statement(
     client: &SparkClient,
+    sigint: &mut Sigint,
     stmt: &str,
     max_rows: usize,
     show_progress: bool,
@@ -55,8 +83,10 @@ pub async fn run_statement(
     let limit = server_limited.then(|| (max_rows + 1).min(i32::MAX as usize) as i32);
 
     let mut spinner = Spinner::new(show_progress && std::io::stderr().is_terminal(), start);
+    // Not raced against Ctrl-C: dropping the submission would disconnect
+    // without an interrupt. A Ctrl-C during submission stays buffered in
+    // `sigint` and is handled by the loop below.
     let mut exec = client.execute_sql(stmt, limit).await?;
-    let operation_id = exec.operation_id.clone();
 
     let mut result = StatementResult {
         schema: None,
@@ -66,11 +96,10 @@ pub async fn run_statement(
         server_limited,
         elapsed: Duration::ZERO,
     };
-    let mut ctrl_c = Box::pin(tokio::signal::ctrl_c());
-    let mut cancelled_at: Option<Instant> = None;
     let mut tick = tokio::time::interval(Duration::from_millis(80));
 
-    let outcome = loop {
+    // `None` = Ctrl-C: cancel below. The loop only borrows `exec`.
+    let outcome: Option<Result<(), ClientError>> = loop {
         tokio::select! {
             ev = exec.next_event() => match ev {
                 Ok(Some(ExecEvent::Batches { schema, batches })) => {
@@ -86,31 +115,31 @@ pub async fn run_statement(
                     }
                 }
                 Ok(Some(ExecEvent::Progress(p))) => spinner.progress = Some(p),
-                Ok(None) => break Ok(()),
-                Err(e) => break Err(e),
+                Ok(None) => break Some(Ok(())),
+                Err(e) => break Some(Err(e)),
             },
-            _ = &mut ctrl_c => {
-                if cancelled_at.is_some() {
-                    // Second Ctrl-C: stop waiting for the server.
-                    break Err(ClientError::Cancelled);
-                }
-                cancelled_at = Some(Instant::now());
-                spinner.note = Some("cancelling… (Ctrl-C again to stop waiting)");
-                spinner.force = true;
-                let _ = client.interrupt(&operation_id).await;
-                ctrl_c = Box::pin(tokio::signal::ctrl_c());
-            }
-            _ = tick.tick() => {
-                if cancelled_at.is_some_and(|t| t.elapsed() > CANCEL_GRACE) {
-                    break Err(ClientError::Cancelled);
-                }
-                spinner.draw();
-            }
+            _ = sigint.recv() => break None,
+            _ = tick.tick() => spinner.draw(),
         }
     };
+
+    let Some(outcome) = outcome else {
+        // Cancel in a background task so that giving up on waiting (a second
+        // Ctrl-C) still lets it finish and not orphan the query.
+        spinner.note = Some("cancelling… (Ctrl-C again to stop waiting)");
+        spinner.force = true;
+        let mut cancel = tokio::spawn(exec.cancel());
+        loop {
+            tokio::select! {
+                _ = &mut cancel => break,
+                _ = sigint.recv() => break,
+                _ = tick.tick() => spinner.draw(),
+            }
+        }
+        spinner.clear();
+        return Err(ClientError::Cancelled);
+    };
     spinner.clear();
-    // A query that finished despite a cancel request still counts as cancelled
-    // from the user's point of view only if the server said so.
     outcome?;
     result.elapsed = start.elapsed();
     Ok(result)

@@ -26,8 +26,9 @@ install: ## Install sparkline into ~/.cargo/bin
 test: ## Unit tests (no Spark needed)
 	cargo test --locked
 
+# One at a time: the tests share one server, and some deliberately fill its task slots.
 test-live: ## Protocol tests against Spark Connect (starts a local server if none is on :15002)
-	dev/with-server.sh cargo test --locked -p sparkline-core --test live
+	dev/with-server.sh cargo test --locked -p sparkline-core --test live -- --test-threads=1
 
 $(VENV)/.pyte:
 	@[ -x $(VENV)/bin/python ] || uv venv -q --python 3.12 $(VENV)

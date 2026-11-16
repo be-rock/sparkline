@@ -22,7 +22,7 @@ use crate::render::{
     format_count, format_duration, render_error, render_results, terminal_width, Expanded,
     RenderOpts,
 };
-use crate::run::{run_statement, StatementResult};
+use crate::run::{run_statement, Sigint, StatementResult};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -64,6 +64,7 @@ pub struct Settings {
 
 pub struct App {
     pub rt: tokio::runtime::Runtime,
+    pub sigint: Sigint,
     pub client: SparkClient,
     pub catalog: Option<Catalog>,
     pub settings: Settings,
@@ -75,9 +76,21 @@ impl App {
     /// Runs every statement in `text`, stopping at the first error.
     /// Returns whether all statements succeeded.
     pub fn run_script(&mut self, text: &str) -> bool {
+        // A Ctrl-C from before this input (e.g. while results were printing)
+        // doesn't apply to it.
+        self.rt.block_on(async { self.sigint.take_pending() });
         for stmt in split_statements(text) {
+            // Ctrl-C between statements stops the rest of the script.
+            if self.rt.block_on(async { self.sigint.take_pending() }) {
+                eprintln!(
+                    "{}",
+                    render_error(&ClientError::Cancelled, None, self.settings.color_err)
+                );
+                return false;
+            }
             let res = self.rt.block_on(run_statement(
                 &self.client,
+                &mut self.sigint,
                 stmt,
                 self.settings.max_rows,
                 true,
@@ -235,14 +248,28 @@ fn real_main(args: Args) -> Result<ExitCode> {
         .worker_threads(2)
         .enable_all()
         .build()?;
-    let (client, spark_version) = rt.block_on(async {
-        let client = SparkClient::connect(&conn).await?;
-        let version = client.spark_version().await?;
-        Ok::<_, ClientError>((client, version))
-    })?;
+    // Installed before anything talks to Spark; see `Sigint`.
+    let mut sigint = rt
+        .block_on(async { Sigint::install() })
+        .context("installing Ctrl-C handler")?;
+    let connected = rt.block_on(async {
+        tokio::select! {
+            r = async {
+                let client = SparkClient::connect(&conn).await?;
+                let version = client.spark_version().await?;
+                Ok::<_, ClientError>((client, version))
+            } => Some(r),
+            _ = sigint.recv() => None,
+        }
+    });
+    let Some(connected) = connected else {
+        return Ok(ExitCode::from(130));
+    };
+    let (client, spark_version) = connected?;
 
     let mut app = App {
         rt,
+        sigint,
         client,
         catalog: None,
         settings: Settings {
